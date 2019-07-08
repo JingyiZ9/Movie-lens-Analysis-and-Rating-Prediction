@@ -1,0 +1,159 @@
+---
+title: "Movie lens Analysis and Rating Prediction"
+author: "Jingyi Zhu, NetID:jingyiz9  Xi Chen, NetID:xic6"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# 1 Introduction 
+In this project, we use the movie lens dataset contains 1 million ratings from 6000 users on 4000 movies to build a movie recommender system to predict the rating of a movie. The ratings data has 1000209 observations and 4 columns: UserID, MovieID, Rating and Timestamp. We split the observations into train data that contains about 60% rows of the observations and test data that contains about 20% of the user-movie pairs from the ratings.dat from the MovieLens 1M dataset.
+
+```{r,include=FALSE}
+#call packages
+library(dplyr)
+library(recommenderlab)  
+library(reshape2)  
+```
+
+# 2 Method 
+In this report, we build the recommender system and use two models: Collaborative Filtering (CF) Method with User-based (UBCF) and Latent Factor Model with SVD. First, we set the seed 6404 at the beginning of the code to acquire the same result each time. We split the data into train data and test data. The train data contains just 60% of the original ratings, so it is possible some movies in movies.dat or users in users.dat do not appear in the training, but in test. Then, we apply two models to the train data we created.
+
+### load the data
+```{r}
+setwd("~/Desktop/STAT542_project3/ml-1m")
+set.seed(6404)
+
+# read ratings data 
+# use colClasses = 'NULL' to skip columns
+ratings = read.csv('ratings.dat', sep = ':', 
+    colClasses = c('integer', 'NULL'), header = FALSE)
+colnames(ratings) = c('UserID', 'MovieID', 'Rating', 'Timestamp')
+dim(ratings) # 1000209-by-4
+head(ratings)
+
+# read movies data
+# In movies.dat, some movie names contain single colon (:), so the above 
+# method does not work. 
+movies = readLines('movies.dat')
+movies = strsplit(movies, split = "::", fixed = TRUE, useBytes = TRUE)
+movies = matrix(unlist(movies), ncol = 3, byrow = TRUE)
+movies = data.frame(movies, stringsAsFactors = FALSE)
+colnames(movies) = c('MovieID', 'Title', 'Genres')
+movies$MovieID = as.integer(movies$MovieID)
+head(movies)
+#Explore the relationship between movie ratings and movie genres. First, simplify movie genres: multiple genres to ‘Multiple’.
+movies$Genres = ifelse(grepl('\\|', movies$Genres), "Multiple", 
+                      movies$Genres)
+rating_merged = merge(x = ratings, y = movies, by.x = "MovieID")
+```
+
+### Prepare training and test data
+```{r}
+ratings$Timestamp = NULL;
+colnames(ratings) = c('user', 'movie', 'rating')
+
+#train dataset
+train.id = sample(nrow(ratings), floor(nrow(ratings)) * 0.6)
+train = ratings[train.id, ]
+
+#test dataset
+test= ratings[-train.id, ]
+test.id = sample(nrow(test), floor(nrow(test)) * 0.5)
+test = test[test.id, ]
+test2=test
+test3=test
+label = test[c('user', 'rating')]
+test$rating = NULL
+```
+
+### build R matrix
+```{r}
+#First, create a utility matrix.
+R = acast(train, user ~ movie)
+R = as(R, 'realRatingMatrix')
+#Normalize the utility matrix and visualize data:
+R_m = normalize(R)
+```
+
+## 2.1 Model 1: Collaborative Filtering (CF) Method with User-based (UBCF)
+To explore the relationship between movie ratings and movie genres, we simplify movie genres: multiple genres to ‘Multiple’. Then we merge ratings and movie datasets by the MovieID.       
+We train a recommender system and make prediction on the test data. First, we create a utility matrix and normalize the utility matrix and visualize data. Then we apply the recommender system with UBCF method and obtain a short summary of the model. We use the test data we split above to make the prediction and the RMSE is 1.035828.
+
+```{r}
+#Learn a recommender. 
+#recommenderRegistry$get_entries(dataType = "realRatingMatrix")
+rec = Recommender(R, method = 'UBCF',
+    parameter = list(normalize = 'Z-score', method = 'Cosine', nn = 5)
+    )
+
+#A short summary of the model:
+print(rec)
+names(getModel(rec))
+
+# make prediction on the test data
+recom = predict(rec, R, type = 'ratings')  # predict ratings. This may be slow.
+rec_list = as(recom, 'list')  # each element are ratings of that user
+test$rating = NA
+
+# For all lines in test file, one by one
+for (u in 1:nrow(test)){
+    # Read userid and movieid from columns 2 and 3 of test data
+    userid = as.character(test$user[u])
+    movieid = as.character(test$movie[u])
+    rating = rec_list[[userid]][movieid]
+    # 2.5 may be too arbitrary
+    test$rating[u] = ifelse(is.na(rating), 2.5, rating)
+}
+
+# write submission file
+write.table(test, file = 'mysubmission1.csv', row.names = FALSE,
+            col.names = TRUE, sep = ',')
+#rmse
+sqrt(mean((label$rating-test$rating)^2))
+```
+
+## 2.2 Model 2: Latent Factor Model with SVD
+We are interested in the matrix factorization part keeping same dimensionality in the recommender system and the matrix factorization is done on the user-movie ratings matrix.      
+Then we apply the latent factor model with SVD method. After using predict() function we acquired the fitted values for the test data and the RMSE is 0.9941208.
+
+```{r}
+#Learn a recommender. 
+rec2 = Recommender(R, method = 'SVD')
+
+#A short summary of the model:
+print(rec2)
+names(getModel(rec2))
+
+# make prediction on the test data
+recom2 = predict(rec2, R, type = 'ratings')  # predict ratings. This may be slow.
+rec_list2 = as(recom2, 'list')  # each element are ratings of that use
+test2$rating = NA
+# For all lines in test file, one by one
+for (u in 1:nrow(test2)){
+    # Read userid and movieid from columns 2 and 3 of test data
+    userid = as.character(test2$user[u])
+    movieid = as.character(test2$movie[u])
+    rating = rec_list2[[userid]][movieid]
+    # 2.5 may be too arbitrary
+    test2$rating[u] = ifelse(is.na(rating), 2.5, rating)
+}
+# write submission file
+write.table(test2, file = 'mysubmission2.csv', row.names = FALSE,
+            col.names = TRUE, sep = ',')
+#rmse
+sqrt(mean((label$rating-test2$rating)^2))
+
+```
+
+# 3 Result
+For Model 1: Collaborative Filtering (CF) Method with User-based (UBCF) the RMSE is 1.035828 on the test data.       
+For Model 2: Latent Factor Model with SVD the RMSE is 0.9941208 on the test data.
+
+# 4 Other Information
+* Computer system: MacBook Pro, 2.53 GHz, 4GB memory 
+* Running time of dataset:   28.27505 minutes
+* Libraries used: dplyr recommenderlab reshape2
+
